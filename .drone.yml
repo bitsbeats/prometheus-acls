@@ -1,0 +1,51 @@
+kind: pipeline
+name: default
+
+steps:
+  - name: test
+    image: golang
+    commands:
+      - go test ./...
+
+  - name: docker
+    image: plugins/docker
+    settings:
+      repo: bitsbeats/prometheus-acls
+      username:
+        from_secret: docker_username
+      password:
+        from_secret: docker_password
+      auto_tag: true
+    depends_on:
+      - test
+
+  - name: build
+    image: golang:alpine
+    commands:
+      -              go build -mod=vendor -ldflags="-s -w" -o prometheus-acls-linux-amd64 .
+      - GOARCH=386   go build -mod=vendor -ldflags="-s -w" -o prometheus-acls-linux-386 .
+      - GOARCH=arm   go build -mod=vendor -ldflags="-s -w" -o prometheus-acls-linux-arm .
+      - GOARCH=arm64 go build -mod=vendor -ldflags="-s -w" -o prometheus-acls-linux-arm64 .
+    when:
+      event: tag
+    depends_on:
+      - test
+
+  - name: release
+    image: plugins/github-release
+    settings:
+      api_key:
+        from_secret: github_token
+      files:
+        - prometheus-acls-linux-386
+        - prometheus-acls-linux-amd64
+        - prometheus-acls-linux-arm
+        - prometheus-acls-linux-arm64
+      checksum:
+        - md5
+        - sha1
+        - sha256
+    when:
+      event: tag
+    depends_on:
+      - build
