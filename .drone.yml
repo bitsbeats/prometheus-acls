@@ -20,7 +20,7 @@ steps:
       - test
 
   - name: build
-    image: golang:alpine
+    image: golang
     commands:
       -              go build -mod=vendor -ldflags="-s -w" -o prometheus-acls-linux-amd64 .
       - GOARCH=386   go build -mod=vendor -ldflags="-s -w" -o prometheus-acls-linux-386 .
