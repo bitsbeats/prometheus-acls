@@ -35,7 +35,7 @@ type (
 	}
 )
 
-// NewAuth creates a new Auth
+// NewOauthAuth creates a new Auth
 func NewOauthAuth(cfg *config.Config, authPath string) (a *OidcAuth, err error) {
 	a = &OidcAuth{}
 	a.cfg = cfg
