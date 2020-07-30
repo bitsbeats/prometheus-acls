@@ -24,7 +24,7 @@ func (l *Labeler) PromACLMiddlewareFor(u *url.URL) func(http.Handler) http.Handl
 			modified := false
 			r.Host = u.Hostname()
 
-			if r.URL.EscapedPath() == "/api/v1/query" || r.URL.EscapedPath() == "/api/v1/query_range" {
+			if r.URL.EscapedPath() == "/api/v1/query" || r.URL.EscapedPath() == "/api/v1/query_range" || r.URL.EscapedPath() == "/api/v1/series" {
 				// lookup acl in context
 				acl, ok := r.Context().Value("acl").(core.ACL)
 				if !ok {
@@ -91,7 +91,7 @@ func (l *Labeler) PromACLMiddlewareFor(u *url.URL) func(http.Handler) http.Handl
 // labelize modifies a prometheus query to inject labels based on acl
 func (l *Labeler) labelize(params *url.Values, acl core.ACL) (modified bool, err error) {
 	for key, value := range *params {
-		if key == "query" {
+		if key == "query" || key == "match[]" {
 			query := value[0]
 
 			start := time.Now()
