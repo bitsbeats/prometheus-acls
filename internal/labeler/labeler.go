@@ -107,11 +107,11 @@ func (l *Labeler) AddLabels(expr promql.Expr, acl core.ACL) (labeled promql.Expr
 		return expr
 	case *promql.VectorSelector:
 		matchers := append(casted.LabelMatchers, acl.GetLabelMatchers(casted.Name)...)
-		casted.LabelMatchers = l.DedupeMatchers(matchers)
+		casted.LabelMatchers = DedupeMatchers(matchers)
 		return casted
 	case *promql.MatrixSelector:
 		matchers := append(casted.LabelMatchers, acl.GetLabelMatchers(casted.Name)...)
-		casted.LabelMatchers = l.DedupeMatchers(matchers)
+		casted.LabelMatchers = DedupeMatchers(matchers)
 		return casted
 	case *promql.SubqueryExpr:
 		casted.Expr = l.AddLabels(casted.Expr, acl)
@@ -120,104 +120,3 @@ func (l *Labeler) AddLabels(expr promql.Expr, acl core.ACL) (labeled promql.Expr
 	return expr
 }
 
-// DedupeMatchers tries to find Matchers that do the same stuff and remove the more cpu intersive
-// version.
-func (l *Labeler) DedupeMatchers(matchers []*labels.Matcher) []*labels.Matcher {
-	deduped := []*labels.Matcher{}
-	exactMatchers := []*labels.Matcher{}
-	exactNotMatchers := []*labels.Matcher{}
-	reMatchers := []*labels.Matcher{}
-	reNotMatchers := []*labels.Matcher{}
-	for _, matcher := range matchers {
-		switch matcher.Type {
-		case labels.MatchEqual:
-			exactMatchers = append(exactMatchers, matcher)
-		case labels.MatchNotEqual:
-			exactNotMatchers = append(exactNotMatchers, matcher)
-
-		case labels.MatchRegexp:
-			reMatchers = append(reMatchers, matcher)
-		case labels.MatchNotRegexp:
-			reNotMatchers = append(reNotMatchers, matcher)
-		}
-	}
-
-outerNotExact:
-	for i, notMatcher := range exactNotMatchers {
-		for _, matcher := range exactMatchers {
-			if notMatcher.Name == matcher.Name && notMatcher.Value != matcher.Value {
-				// notMatcher already satisfied by exactMatcher
-				continue outerNotExact
-			}
-		}
-		for _, notMatcher2 := range exactNotMatchers[i+1:] {
-			if notMatcher.Name == notMatcher2.Name && notMatcher.Value == notMatcher2.Value {
-				// doubled
-				continue outerNotExact
-			}
-		}
-		deduped = append(deduped, notMatcher)
-	}
-
-outerExact:
-	for i, matcher := range exactMatchers {
-		for _, matcher2 := range exactMatchers[i+1:] {
-			if matcher.Name == matcher2.Name {
-				if matcher.Value == matcher2.Value {
-					// doubled
-					continue outerExact
-				} else {
-					// one label cant have two results at the same time
-					return NoneLabelMatcher
-				}
-			}
-		}
-		deduped = append(deduped, matcher)
-	}
-
-outerNotRe:
-	for i, reNotMatcher := range reNotMatchers {
-		for _, matcher := range exactMatchers {
-			if reNotMatcher.Name == matcher.Name {
-				if reNotMatcher.Matches(matcher.Value) {
-					// regex not match already by static matcher done
-					continue outerNotRe
-				} else {
-					// regex does not match the leftovers of static match
-					return NoneLabelMatcher
-				}
-			}
-		}
-		for _, reNotMatcher2 := range reNotMatchers[i+1:] {
-			if reNotMatcher.Name == reNotMatcher2.Name && reNotMatcher.Value == reNotMatcher2.Value {
-				// doubled
-				continue outerNotRe
-			}
-		}
-		deduped = append(deduped, reNotMatcher)
-	}
-
-outerRe:
-	for i, reMatcher := range reMatchers {
-		for _, matcher := range exactMatchers {
-			if matcher.Name == reMatcher.Name {
-				if reMatcher.Matches(matcher.Value) {
-					// drop reMatcher that is already satisfied by matcher
-					continue outerRe
-				} else {
-					// // regex does not match the leftovers of static match
-					return NoneLabelMatcher
-				}
-
-			}
-		}
-		for _, reMatcher2 := range reMatchers[i+1:] {
-			if reMatcher.Name == reMatcher2.Name && reMatcher.Value == reMatcher2.Value {
-				// doubled
-				continue outerRe
-			}
-		}
-		deduped = append(deduped, reMatcher)
-	}
-	return deduped
-}
