@@ -17,7 +17,6 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/bitsbeats/prometheus-acls/internal/config"
-	"github.com/bitsbeats/prometheus-acls/internal/core"
 	"github.com/bitsbeats/prometheus-acls/internal/prom"
 )
 
@@ -129,7 +128,7 @@ func (a OidcAuth) auth(r *http.Request) (t *oidc.IDToken, err error) {
 	return
 }
 
-func (a OidcAuth) loadACL(idToken *oidc.IDToken) (acl core.ACL, err error) {
+func (a OidcAuth) loadACL(idToken *oidc.IDToken) (roles []string, err error) {
 	// add auth to context
 	var claimsLoader interface{}
 	err = idToken.Claims(&claimsLoader)
@@ -140,24 +139,36 @@ func (a OidcAuth) loadACL(idToken *oidc.IDToken) (acl core.ACL, err error) {
 	if !ok {
 		return nil, fmt.Errorf("unable to cast access token claims")
 	}
-	roles, ok := claimsMap[a.cfg.OidcRolesClaim].([]interface{})
+	resourceAccess, ok := claimsMap["resource_access"]
 	if !ok {
 		return nil, fmt.Errorf("unable to load acces token claims from %s", a.cfg.OidcRolesClaim)
 	}
-	for _, role := range roles {
+	resourceAccessMap, ok := resourceAccess.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unable to load acces token claims from %s", a.cfg.OidcRolesClaim)
+	}
+	access, ok := resourceAccessMap["thanos"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unable to load acces token claims from %s", a.cfg.OidcRolesClaim)
+	}
+	accessRoles, ok := access["roles"]
+	if !ok {
+		return nil, fmt.Errorf("unable to load acces token claims from %s", a.cfg.OidcRolesClaim)
+	}
+	rs, ok := accessRoles.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unable to load acces token claims from %s", a.cfg.OidcRolesClaim)
+	}
+	roles = make([]string, 0, len(rs))
+	for _, role := range rs {
 		var ok bool
 		role, ok := role.(string)
 		if !ok {
 			continue
 		}
-		acl, ok = a.cfg.ACLMap.GetACL(role)
-		if ok {
-			break
-		}
+		roles = append(roles, role)
 	}
-	if acl == nil {
-		acl = a.cfg.ACLMap.GetDenyACL()
-	}
+
 	return
 }
 

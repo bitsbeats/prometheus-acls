@@ -1,10 +1,11 @@
 # example config, see readme for explaination
 
-developer:
-  re!^awesome_app_: env=dev
-  re!^node_: instance=~'.*\.lan$'
-  up: env!=dev,app=hal
+#developer:
+#  re!^awesome_app_: env=dev
+#  re!^node_: instance=~'.*\.lan$'
+#  up: env!=dev,app=hal
+#
+#admin:
+#  secret_app_: ~
+#  '*': ''
 
-admin:
-  secret_app_: ~
-  '*': ''
