@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"github.com/bitsbeats/prometheus-acls/internal/api"
 	"net/http"
 	"path"
 	"strings"
@@ -13,15 +14,16 @@ import (
 
 	"github.com/coreos/go-oidc"
 	"github.com/gorilla/sessions"
+	"github.com/prometheus/prometheus/pkg/labels"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/oauth2"
 
 	"github.com/bitsbeats/prometheus-acls/internal/config"
-	"github.com/bitsbeats/prometheus-acls/internal/prom"
+	"github.com/bitsbeats/prometheus-acls/internal/injectproxy"
 )
 
 type (
-	// OidcAuth provides middleware and oauth handlers for authentification
+	// OidcAuth provides middleware and oauth handlers for authentication
 	OidcAuth struct {
 		loginURL    string
 		redirectURL string
@@ -128,7 +130,7 @@ func (a OidcAuth) auth(r *http.Request) (t *oidc.IDToken, err error) {
 	return
 }
 
-func (a OidcAuth) loadACL(idToken *oidc.IDToken) (roles []string, err error) {
+func (a OidcAuth) loadRoles(idToken *oidc.IDToken) (roles []string, err error) {
 	// add auth to context
 	var claimsLoader interface{}
 	err = idToken.Claims(&claimsLoader)
@@ -246,20 +248,74 @@ func (a OidcAuth) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 // Middleware verifies the token and redirects to login
 func (a OidcAuth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.EscapedPath()
 		idToken, err := a.auth(r)
 		if err != nil {
-			prom.SendError(w, r, err.Error(), http.StatusBadRequest, a.redirectErrorHandler)
-			return
-		}
-		acl, err := a.loadACL(idToken)
-		if err != nil {
-			log.WithError(err).Error("unable to load acl")
-			prom.SendError(w, r, "unable to load acl", http.StatusBadRequest, a.redirectErrorHandler)
-			return
-		}
-		r = r.WithContext(context.WithValue(r.Context(), "acl", acl))
+			if prometheusPath(path) {
+				api.RespondError(w, &api.ApiError{Typ: api.ErrorBadData, Err: err}, nil)
+			} else {
+				http.Redirect(w, r, a.loginURL, http.StatusTemporaryRedirect)
+			}
 
-		// handle request
+			return
+		}
+		roles, err := a.loadRoles(idToken)
+		if err != nil {
+			if prometheusPath(path) {
+				api.RespondError(w, &api.ApiError{Typ: api.ErrorBadData, Err: err}, nil)
+			} else {
+				http.Redirect(w, r, a.loginURL, http.StatusTemporaryRedirect)
+			}
+
+			return
+		}
+
+		r = r.WithContext(context.WithValue(r.Context(), injectproxy.KeyLabel, rolesToLabelMatcher(roles, a.cfg.Label)))
 		next.ServeHTTP(w, r)
 	})
+}
+
+func rolesToLabelMatcher(roles []string, label string) (v *injectproxy.CtxValue) {
+	v = new(injectproxy.CtxValue)
+	validNamespaces := make([]string, 0, len(roles))
+	for _, r := range roles {
+		if r == "Admin" {
+			v.Admin = true
+			return
+		} else if strings.HasPrefix(r, "thanos-proj-") && strings.HasSuffix(r, "-owner") {
+			validNamespaces = append(validNamespaces, "gitops-"+strings.TrimSuffix(strings.TrimPrefix(r, "thanos-proj-"), "-owner"))
+		}
+	}
+
+	if len(validNamespaces) == 0 {
+		return
+	} else if len(validNamespaces) == 1 {
+		v.Matcher = &labels.Matcher{
+			Name:  label,
+			Value: validNamespaces[0],
+			Type:  labels.MatchEqual,
+		}
+		return
+	} else {
+		v.Matcher = labels.MustNewMatcher(labels.MatchRegexp, label, strings.Join(validNamespaces, "|"))
+	}
+
+	return
+}
+
+func prometheusPath(path string) bool {
+	switch {
+	case strings.HasSuffix(path, "/api/v1/query") ||
+		strings.HasSuffix(path, "/api/v1/query_range") ||
+		strings.HasSuffix(path, "/api/v1/query_exemplars"):
+		return true
+
+	case strings.HasSuffix(path, "/api/v1/series") ||
+		strings.HasSuffix(path, "/api/v1/labels") ||
+		injectproxy.LabelValuesRegexp.MatchString(path):
+		return true
+
+	default:
+		return false
+	}
 }
